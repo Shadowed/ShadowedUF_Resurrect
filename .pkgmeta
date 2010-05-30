@@ -1,4 +1,0 @@
-package-as: ShadowedUF_Trinkets
-
-required-dependencies:
-    - shadowed-unit-frames
