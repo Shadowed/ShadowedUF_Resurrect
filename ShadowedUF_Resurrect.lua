@@ -5,7 +5,7 @@
 local Resurrect = select(2, ...)
 local L, SL = Resurrect.L, ShadowUF.L
 local ResComm = LibStub("LibResComm-1.0")
-local frames = {}
+local frames, resTarget = {}, {}
 ShadowUF.activeRes = {}
 
 -- Setup our custom tag, using the general tags system so if this addon is removed the tags will no longer show up as their name instead of silently breaking
@@ -52,13 +52,26 @@ function Resurrect:UpdateAll()
 end
 
 function Resurrect:ResStart(event, caster, endTime, target)
-	ShadowUF.activeRes[target] = true
-	self:UpdateAll()
+	if( target ) then
+		ShadowUF.activeRes[target] = true
+		self:UpdateAll()
+		
+		resTarget[caster] = target
+	end
 end
 
+-- I'm not entirely sure why target can sometimes be nil, but I'll assume that it's possible for target to be nil and base it off the caster if it has to
 function Resurrect:ResEnd(event, caster, target)
-	ShadowUF.activeRes[target] = nil
-	self:UpdateAll()
+	if( target ) then
+		ShadowUF.activeRes[target] = nil
+		self:UpdateAll()
+		
+		resTarget[caster] = nil
+	elseif( resTarget[caster] ) then
+		ShadowUF.activeRes[resTarget[caster]] = nil
+		resTarget[caster] = nil
+		self:UpdateAll()
+	end
 end
 
 -- Maintain the general list of tags that care about pvp trinkets
