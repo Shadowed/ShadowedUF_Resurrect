@@ -1,46 +1,100 @@
-﻿--[[
-Name: LibResComm-1.0
-Revision: $Revision: 48 $
-Author(s): DathRarhek (Polleke) (polleke@gmail.com)
-Documentation: http://www.wowace.com/index.php/LibResComm-1.0
-SVN:  svn://svn.wowace.com/wow/librescomm-1-0/mainline/trunk
-Description: Keeps track of resurrection spells cast in the raid group
-Dependencies: LibStub, CallbackHandler-1.0
+--[[
+	Name: LibResComm-1.0
+	Revision: $Revision: 79 $
+	Author(s): DathRarhek (Polleke) (polleke@gmail.com)
+	Continued for Cataclysm by Myrroddin and Phanx
+	Documentation: http://www.wowace.com/index.php/LibResComm-1.0
+	SVN:  svn://svn.wowace.com/wow/librescomm-1-0/mainline/trunk
+	Description: Keeps track of resurrection spells cast in the raid group
+	Dependencies: LibStub, CallbackHandler-1.0
 ]]
 
 local MAJOR_VERSION = "LibResComm-1.0"
-local MINOR_VERSION = 90000 + tonumber(("$Revision: 48 $"):match("%d+"))
+local MINOR_VERSION = 90000 + tonumber(("$Revision: 79 $"):match("%d+"))
 
 local lib = LibStub:NewLibrary(MAJOR_VERSION, MINOR_VERSION)
 if not lib then return end
 
--- Older version loaded. Clean up
 if lib.disable then
 	lib.disable()
 end
 
---------------------------------------------------------------------------------
--- Localization
+------------------------------------------------------------------------
+--	Localization
 --
 
-local corpseOf = "^Corpse of (.+)$"
-local l = GetLocale()
-if l == "frFR" then
-	corpseOf = "^Cadavre d[e'] ?(.+)$"
-elseif l == "deDE" then
-	corpseOf = "^Leichnam von (.+)$"
-elseif l == "koKR" then
-	corpseOf = "(.+)의 시체$"
-elseif l == "zhCN" then
-	corpseOf = "^(.+)的尸体"
-elseif l == "zhTW" then
-	corpseOf = "^(.+)的屍體"
-elseif l == "ruRU" then
-	corpseOf = "^Труп (.+)$"
+local L = {
+	-- use global string for locale independence
+	CORPSE_OF = "^" .. CORPSE_TOOLTIP:gsub("%%s", "(.+)"),
+
+	-- needs to match return values from HasSoulstone()
+	["Use Soulstone"] = "Use Soulstone",
+	["Reincarnate"] = "Reincarnate",
+	["Twisting Nether"] = "Twisting Nether",
+
+	-- sensible text to show
+	["Soulstone"] = "Soulstone",
+}
+
+local LOCALE = GetLocale()
+if LOCALE == "deDE" then
+	L["Reincarnate"] = "Reinkarnation"
+L["Soulstone"] = "Seelenstein"
+L["Twisting Nether"] = "Wirbelnder Nether"
+L["Use Soulstone"] = "Seelenstein benutzen"
+
+elseif LOCALE == "esES" or LOCALE == "esMX" then
+	L["Reincarnate"] = "Reencarnación"
+L["Soulstone"] = "Piedra de alma"
+L["Twisting Nether"] = "Vacío Abisal" -- Needs review
+L["Use Soulstone"] = "Utilice piedra de alma" -- Needs review
+
+elseif LOCALE == "frFR" then
+	L["Reincarnate"] = "Réincarner" -- Needs review
+L["Soulstone"] = "Pierre d'âme"
+L["Twisting Nether"] = "Néant distordu"
+L["Use Soulstone"] = "Utilisez Soulstone" -- Needs review
+
+elseif LOCALE == "ruRU" then
+	L["Reincarnate"] = "Перевоплощаться" -- Needs review
+L["Soulstone"] = "Камень души"
+L["Twisting Nether"] = "Круговерть Пустоты" -- Needs review
+L["Use Soulstone"] = "Используйте камень" -- Needs review
+
+elseif LOCALE == "koKR" then
+	L["Reincarnate"] = "윤회"
+L["Soulstone"] = "영혼석"
+L["Twisting Nether"] = "뒤틀린 황천"
+L["Use Soulstone"] = "영혼석 사용"
+
+elseif LOCALE == "zhCN" then
+	L["Reincarnate"] = "复生"
+L["Soulstone"] = "灵魂石"
+L["Twisting Nether"] = "扭曲虚空"
+L["Use Soulstone"] = "使用灵魂石"
+
+elseif LOCALE == "zhTW" then
+	L["Reincarnate"] = "復生效果"
+L["Soulstone"] = "靈魂石"
+L["Twisting Nether"] = "扭曲虛空"
+L["Use Soulstone"] = "靈魂石復活效果"
+
 end
 
---------------------------------------------------------------------------------
--- Event frame
+local soulstoneToken = {
+	[L["Use Soulstone"]] = "SS",
+	[L["Reincarnate"]] = "RE",
+	[L["Twisting Nether"]] = "TN",
+}
+
+local soulstoneText = {
+	["SS"] = L["Soulstone"],
+	["RE"] = GetSpellInfo(20608), -- just use Reincarnation spell name
+	["TN"] = L["Twisting Nether"],
+}
+
+------------------------------------------------------------------------
+--	Event frame
 --
 
 lib.eventFrame = lib.eventFrame or CreateFrame("Frame")
@@ -49,16 +103,16 @@ lib.eventFrame:SetScript("OnEvent", function(this, event, ...)
 end)
 lib.eventFrame:UnregisterAllEvents()
 
---------------------------------------------------------------------------------
--- Embed CallbackHandler-1.0
+------------------------------------------------------------------------
+--	Embed CallbackHandler-1.0
 --
 
 if not lib.Callbacks then
 	lib.Callbacks = LibStub("CallbackHandler-1.0"):New(lib)
 end
 
---------------------------------------------------------------------------------
--- Locals
+------------------------------------------------------------------------
+--	Locals
 --
 
 local playerName = UnitName("player")
@@ -78,27 +132,23 @@ local inBattlegroundOrArena = nil
 -- For tracking STOP messages
 local isCasting = nil
 
--- So bug is only reported once
-local reportBugOnce = false
-
 -- Tracking resses
 local activeRes = {}
 
-local resSpells = {
-	SHAMAN = (GetSpellInfo(20777)),
-	PRIEST = (GetSpellInfo(25435)),
-	PALADIN = (GetSpellInfo(20773)),
-	DRUID = (GetSpellInfo(50764))
-}
-local combatresSpells = {
-	DRUID = (GetSpellInfo(20484))
-}
+local resSpell, combatResSpell -- avoid creating tables we're just going to discard immediately
+if playerClass == "DRUID" then
+	resSpell = GetSpellInfo(50769) -- Revive
+	combatResSpell = GetSpellInfo(20484) -- Rebirth
+elseif playerClass == "PALADIN" then
+	resSpell = GetSpellInfo(7328) -- Redemption
+elseif playerClass == "PRIEST" then
+	resSpell = GetSpellInfo(2006) -- Resurrection
+elseif playerClass == "SHAMAN" then
+	resSpell = GetSpellInfo(2008) -- Ancestral Spirit
+end
 
-local resSpell = resSpells[playerClass]
-local combatresSpell = combatresSpells[playerClass]
-
---------------------------------------------------------------------------------
--- Utilities
+------------------------------------------------------------------------
+--	Utilities
 --
 
 local function commSend(contents, distribution, target)
@@ -107,18 +157,19 @@ local function commSend(contents, distribution, target)
 	end
 end
 
---------------------------------------------------------------------------------
--- Event Handlers
+------------------------------------------------------------------------
+--	Event Handlers
 --
 
 function lib.eventFrame:UNIT_SPELLCAST_SENT(unit, _, _, targetName)
 	if unit ~= "player" then return end
-	sentTargetName = targetName
+
+	sentTargetName = targetName:match("^([^%-]+)")
 end
 
 function lib.eventFrame:UNIT_SPELLCAST_START(unit, spellName)
 	if unit ~= "player" then return end
-	if spellName ~= resSpell and spellName ~= combatresSpell then return end
+	if spellName ~= resSpell and spellName ~= combatResSpell then return end
 
 	isCasting = true
 
@@ -127,29 +178,31 @@ function lib.eventFrame:UNIT_SPELLCAST_START(unit, spellName)
 		target = mouseDownTarget
 	end
 
+	if not target and GameTooltipTextLeft1:IsVisible() then
+		-- check tooltip in case of mouseover casting on a corpse whose spirit has been released
+		target = GameTooltipTextLeft1:GetText():match(L.CORPSE_OF)
+	end
+
 	if not target then
-		if not reportBugOnce then
-			print("Possible bug in LibResComm-1.0. Please file a ticket at http://www.wowace.com/addons/librescomm-1-0/tickets/")
-			reportBugOnce = true
-		end
-		target = "Target Unknown"
-	end		
-	
+		-- still nothing :(
+		return
+	end
+
 	local endTime = select(6, UnitCastingInfo(unit)) or (GetTime() + 10) * 1000
 	endTime = endTime / 1000
 
 	activeRes[playerName] = target
 
 	lib.Callbacks:Fire("ResComm_ResStart", playerName, endTime, target)
-	commSend(string.format("RES %s", target))
+	commSend(("RES %s"):format(target))
 end
 
 function lib.eventFrame:CHAT_MSG_ADDON(prefix, msg, distribution, sender)
 	if prefix ~= "CTRA" then return end
 	if sender == playerName then return end
+	sender = sender:match("^([^%-]+)")
 
 	local target
-
 	for cmd, targetName in msg:gmatch("(%a+)%s?([^#]*)") do
 		-- A lot of garbage can come in, make absolutely sure we have a decent message
 		if cmd == "RES" and targetName ~= "" and targetName ~= UNKNOWN then
@@ -174,9 +227,9 @@ function lib.eventFrame:CHAT_MSG_ADDON(prefix, msg, distribution, sender)
 			end
 			lib.Callbacks:Fire("ResComm_Ressed", sender)
 		elseif cmd == "CANRES" then
-			lib.Callbacks:Fire("ResComm_CanRes", sender)
+			lib.Callbacks:Fire("ResComm_CanRes", sender, targetName, targetName and soulstoneText[targetName]) -- send token and text with callback
 		elseif cmd == "NORESSED" then
-			lib.Callbacks:Fire("ResComm_ResExpired",sender)
+			lib.Callbacks:Fire("ResComm_ResExpired", sender)
 		end
 	end
 end
@@ -196,7 +249,7 @@ end
 
 function lib.eventFrame:UNIT_SPELLCAST_STOP(unit, spellName)
 	if unit ~= "player" or not isCasting then return end
-	
+
 	local target = activeRes[playerName]
 	if activeRes[playerName] then
 		activeRes[playerName] = nil
@@ -207,21 +260,25 @@ function lib.eventFrame:UNIT_SPELLCAST_STOP(unit, spellName)
 	isCasting = false
 end
 
+lib.eventFrame.UNIT_SPELLCAST_FAILED = lib.eventFrame.UNIT_SPELLCAST_STOP
+lib.eventFrame.UNIT_SPELLCAST_INTERRUPTED = lib.eventFrame.UNIT_SPELLCAST_STOP
+
 function lib.eventFrame:PLAYER_ENTERING_WORLD()
 	local it = select(2, IsInInstance())
 	inBattlegroundOrArena = (it == "pvp") or (it == "arena")
 end
 
---------------------------------------------------------------------------------
+------------------------------------------------------------------------
 -- Public Functions
 
---[[ IsUnitBeingRessed(unit)
-
-Description: Checks if a unit is being ressurected at that moment.
-
-Input: Name of a friendly player
-
-Output: Boolean. True when unit is being ressed. False when not.
+--[[
+	IsUnitBeingRessed(unit)
+	Checks if a unit is being ressurected at that moment.
+	Arguments:
+		unit - string; name of a friendly player
+	Returns:
+		isBeingRessed - boolean; true when unit is being ressed, false otherwise
+		resser - string; name of the player ressing the unit
 ]]--
 
 function lib:IsUnitBeingRessed(unit)
@@ -233,17 +290,14 @@ function lib:IsUnitBeingRessed(unit)
 	return false
 end
 
---------------------------------------------------------------------------------
+------------------------------------------------------------------------
 -- Hooks
 --
 
 -- Credits to Ora2
 function lib:worldFrameOnMouseDown()
 	if GameTooltipTextLeft1:IsVisible() then
-		local target = select(3, GameTooltipTextLeft1:GetText():find(corpseOf))
-		if target then	
-			mouseDownTarget = target
-		end
+		mouseDownTarget = GameTooltipTextLeft1:GetText():match(L.CORPSE_OF)
 	end
 end
 
@@ -253,10 +307,17 @@ function lib:popupFuncRessed()
 end
 
 function lib:popupFuncCanRes()
-	if not HasSoulstone() then return end
+	local kind = HasSoulstone()
+	if not kind then return end
 
 	lib.Callbacks:Fire("ResComm_CanRes", playerName)
 	commSend("CANRES")
+
+	local token = soulstoneToken[kind]
+	if token then
+		-- send a second comm with a token representing the type of self-res available
+		commSend("CANRES " .. token)
+	end
 end
 
 function lib:popupFuncExpired()
@@ -266,7 +327,7 @@ end
 
 function lib:noop()
 end
---------------------------------------------------------------------------------
+------------------------------------------------------------------------
 -- Register events and hooks
 --
 
@@ -274,6 +335,8 @@ function lib:start()
 	lib.eventFrame:RegisterEvent("CHAT_MSG_ADDON")
 
 	if isResser then
+		lib.eventFrame:RegisterEvent("UNIT_SPELLCAST_FAILED")
+		lib.eventFrame:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED")
 		lib.eventFrame:RegisterEvent("UNIT_SPELLCAST_SENT")
 		lib.eventFrame:RegisterEvent("UNIT_SPELLCAST_START")
 		lib.eventFrame:RegisterEvent("UNIT_SPELLCAST_STOP")
@@ -284,9 +347,9 @@ function lib:start()
 
 	worldFrameHook = WorldFrame:GetScript("OnMouseDown")
 	if not worldFrameHook then
-		worldFrameHook = lib.noop;
+		worldFrameHook = lib.noop
 	end
-	
+
 	WorldFrame:SetScript("OnMouseDown", function(...)
 		lib:worldFrameOnMouseDown()
 		worldFrameHook(...)
@@ -315,42 +378,42 @@ function lib:start()
 		lib:popupFuncCanRes()
 		death(...)
 	end
-	
+
 	if not StaticPopupDialogs["RESURRECT"].OnHide then
 		StaticPopupDialogs["RESURRECT"].OnHide = function() lib:popupFuncExpired() end
-	else 
+	else
 		local resurrect = StaticPopupDialogs["RESURRECT"].OnHide
-		StaticPopupDialogs["RESURRECT"].OnHide = function(...) 
+		StaticPopupDialogs["RESURRECT"].OnHide = function(...)
 			lib:popupFuncExpired()
 			resurrect(...)
-		end	
+		end
 	end
-	
+
 	if not StaticPopupDialogs["RESURRECT_NO_SICKNESS"].OnHide then
 		StaticPopupDialogs["RESURRECT_NO_SICKNESS"].OnHide = function() lib:popupFuncExpired() end
 	else
 		local resNoSick = StaticPopupDialogs["RESURRECT_NO_SICKNESS"].OnHide
-		StaticPopupDialogs["RESURRECT_NO_SICKNESS"].OnHide = function(...) 
+		StaticPopupDialogs["RESURRECT_NO_SICKNESS"].OnHide = function(...)
 			lib:popupFuncExpired()
 			resNoSick(...)
-		end	
+		end
 	end
-	
+
 	if not StaticPopupDialogs["RESURRECT_NO_TIMER"].OnHide then
-		StaticPopupDialogs["RESURRECT_NO_TIMER"].OnHide = function() 
+		StaticPopupDialogs["RESURRECT_NO_TIMER"].OnHide = function()
 			if not StaticPopup_FindVisible("DEATH") then lib:popupFuncExpired() end
 		end
 	else
 		local resNoTimer = StaticPopupDialogs["RESURRECT_NO_TIMER"].OnHide
-		StaticPopupDialogs["RESURRECT_NO_TIMER"].OnHide = function(...) 
+		StaticPopupDialogs["RESURRECT_NO_TIMER"].OnHide = function(...)
 			if not StaticPopup_FindVisible("DEATH") then lib:popupFuncExpired() end
 			resNoTimer(...)
-		end	
+		end
 	end
-	
+
 end
 
---------------------------------------------------------------------------------
+------------------------------------------------------------------------
 -- Start library
 --
 
